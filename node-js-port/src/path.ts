@@ -126,4 +126,25 @@ export class Path {
     }
     return area;
   }
+
+  /**
+   * Builds a path from a structural shape.
+   *
+   * `rasterize` takes a `Path` because it uses the builder's own `bounds()`;
+   * the render pipeline works with plain command lists so geometry from the
+   * other ports needs no conversion. This adapter is the seam between them.
+   */
+  static from(shape: { readonly commands: readonly PathCommand[] }): Path {
+    const p = new Path();
+    for (const cmd of shape.commands) {
+      switch (cmd.kind) {
+        case 'MoveTo': p.moveTo(cmd.x, cmd.y); break;
+        case 'LineTo': p.lineTo(cmd.x, cmd.y); break;
+        case 'QuadTo': p.quadTo(cmd.cx, cmd.cy, cmd.x, cmd.y); break;
+        case 'CubicTo': p.cubicTo(cmd.c1x, cmd.c1y, cmd.c2x, cmd.c2y, cmd.x, cmd.y); break;
+        case 'Close': p.close(); break;
+      }
+    }
+    return p;
+  }
 }

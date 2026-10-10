@@ -9,3 +9,8 @@ assets/downloads/*
 !assets/downloads/.tracked
 research/examples/headless/outputs/*
 !research/examples/headless/outputs/.tracked
+
+# Node
+node_modules/
+dist/
+*.tsbuildinfo

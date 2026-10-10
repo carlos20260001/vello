@@ -10,5 +10,8 @@
   "scripts": {
     "build": "tsc --build",
     "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@egui-node/peniko-ts": "file:../../peniko/node-js-port"
   }
 }
