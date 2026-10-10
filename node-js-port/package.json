@@ -1,0 +1,14 @@
+{
+  "name": "@egui-node/vello-cpu-ts",
+  "version": "0.1.0",
+  "description": "TypeScript glyph rasterizer replacing the vello_cpu crate",
+  "license": "MIT OR Apache-2.0",
+  "private": true,
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "scripts": {
+    "build": "tsc --build",
+    "typecheck": "tsc --noEmit"
+  }
+}
