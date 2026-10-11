@@ -1,130 +1,42 @@
 /**
- * Path primitives for the rasterizer.
+ * Path primitives for the glyph rasterizer.
  *
- * Deliberately a standalone copy rather than a dependency on the `skrifa`
- * port: the two crates are separate upstream projects with separate forks and
- * release cycles, so coupling them would be wrong. The shape of this type
- * matches `skrifa`'s `Path` so an outline crosses over without conversion.
+ * A `kurbo::BezPath` in every respect, with two additions the rasterizer needs
+ * that kurbo does not carry: `bounds()`, which reports the hull of the control
+ * points, and `Path.from`, which adopts a bare command list.
+ *
+ * Deliberately a specialization of the `kurbo` port's `BezPath` rather than a
+ * dependency on the `skrifa` port: the two crates are separate upstream
+ * projects with separate forks and release cycles, so coupling them would be
+ * wrong. The element type is shared with `kurbo` (`PathEl`), so an outline
+ * crosses over from either side without conversion.
+ *
+ * Note that `y` grows **upwards** here, as in font space: this is the
+ * rasterizer's own convention, and it is not the convention the vello render
+ * pipeline works in. See `render/mod.ts` for the single place the two are
+ * reconciled.
  */
 
-export type PathCommand =
-  | { kind: 'MoveTo'; x: number; y: number }
-  | { kind: 'LineTo'; x: number; y: number }
-  | { kind: 'QuadTo'; cx: number; cy: number; x: number; y: number }
-  | { kind: 'CubicTo'; c1x: number; c1y: number; c2x: number; c2y: number; x: number; y: number }
-  | { kind: 'Close' };
+import { BezPath } from './kurbo/bezpath.js';
+import { bounding_box } from './kurbo/shape.js';
+import type { PathEl } from './kurbo/bezpath.js';
+import { Point } from './kurbo/point.js';
+
+/** A single path element, as kurbo's `PathEl`. Kept as the glyph side's name. */
+export type PathCommand = PathEl;
 
 /** A path of contours. Note `y` grows upwards, as in font space. */
-export class Path {
-  readonly commands: PathCommand[] = [];
-
-  moveTo(x: number, y: number): this {
-    this.commands.push({ kind: 'MoveTo', x, y });
-    return this;
-  }
-
-  lineTo(x: number, y: number): this {
-    this.commands.push({ kind: 'LineTo', x, y });
-    return this;
-  }
-
-  quadTo(cx: number, cy: number, x: number, y: number): this {
-    this.commands.push({ kind: 'QuadTo', cx, cy, x, y });
-    return this;
-  }
-
-  cubicTo(c1x: number, c1y: number, c2x: number, c2y: number, x: number, y: number): this {
-    this.commands.push({ kind: 'CubicTo', c1x, c1y, c2x, c2y, x, y });
-    return this;
-  }
-
-  close(): this {
-    this.commands.push({ kind: 'Close' });
-    return this;
-  }
-
-  /** Append another path's commands. */
-  extend(other: Path): this {
-    this.commands.push(...other.commands);
-    return this;
-  }
-
-  get is_empty(): boolean {
-    return this.commands.length === 0;
-  }
-
-  /** Axis-aligned bounds over all on- and off-curve control points. */
-  bounds(): { xMin: number; yMin: number; xMax: number; yMax: number } | undefined {
-    let xMin = Number.POSITIVE_INFINITY;
-    let yMin = Number.POSITIVE_INFINITY;
-    let xMax = Number.NEGATIVE_INFINITY;
-    let yMax = Number.NEGATIVE_INFINITY;
-    let any = false;
-
-    const acc = (x: number, y: number) => {
-      any = true;
-      if (x < xMin) xMin = x;
-      if (y < yMin) yMin = y;
-      if (x > xMax) xMax = x;
-      if (y > yMax) yMax = y;
-    };
-
-    for (const c of this.commands) {
-      switch (c.kind) {
-        case 'MoveTo':
-        case 'LineTo':
-          acc(c.x, c.y);
-          break;
-        case 'QuadTo':
-          acc(c.cx, c.cy);
-          acc(c.x, c.y);
-          break;
-        case 'CubicTo':
-          acc(c.c1x, c.c1y);
-          acc(c.c2x, c.c2y);
-          acc(c.x, c.y);
-          break;
-        case 'Close':
-          break;
-      }
-    }
-    return any ? { xMin, yMin, xMax, yMax } : undefined;
-  }
-
+export class Path extends BezPath {
   /**
-   * Signed area, doubled. Positive means counter-clockwise in a y-up space.
-   * Used to normalise winding direction if a consumer needs consistent fills.
+   * Axis-aligned bounds over all on- and off-curve control points.
+   *
+   * `Shape::bounding_box` in a different shape: the glyph rasterizer works with
+   * `min`/`max` names rather than a `Rect`.
    */
-  approximate_area(): number {
-    let area = 0;
-    let cx = 0;
-    let cy = 0;
-    let startX = 0;
-    let startY = 0;
-    for (const c of this.commands) {
-      switch (c.kind) {
-        case 'MoveTo':
-          cx = startX = c.x;
-          cy = startY = c.y;
-          break;
-        case 'LineTo':
-          area += cx * c.y - c.x * cy;
-          cx = c.x;
-          cy = c.y;
-          break;
-        case 'Close':
-          area += cx * startY - startX * cy;
-          cx = startX;
-          cy = startY;
-          break;
-        default:
-          // Curves contribute their endpoints for a coarse estimate.
-          cx = c.x;
-          cy = c.y;
-          break;
-      }
-    }
-    return area;
+  bounds(): { xMin: number; yMin: number; xMax: number; yMax: number } | undefined {
+    if (this.is_empty) return undefined;
+    const b = bounding_box(this);
+    return { xMin: b.x0, yMin: b.y0, xMax: b.x1, yMax: b.y1 };
   }
 
   /**
@@ -134,17 +46,40 @@ export class Path {
    * the render pipeline works with plain command lists so geometry from the
    * other ports needs no conversion. This adapter is the seam between them.
    */
-  static from(shape: { readonly commands: readonly PathCommand[] }): Path {
+  static from(shape: { readonly commands: readonly PathEl[] }): Path {
     const p = new Path();
-    for (const cmd of shape.commands) {
-      switch (cmd.kind) {
-        case 'MoveTo': p.moveTo(cmd.x, cmd.y); break;
-        case 'LineTo': p.lineTo(cmd.x, cmd.y); break;
-        case 'QuadTo': p.quadTo(cmd.cx, cmd.cy, cmd.x, cmd.y); break;
-        case 'CubicTo': p.cubicTo(cmd.c1x, cmd.c1y, cmd.c2x, cmd.c2y, cmd.x, cmd.y); break;
-        case 'Close': p.close(); break;
-      }
-    }
+    p.extend(shape.commands);
     return p;
+  }
+
+  // -- Glyph-side spellings -------------------------------------------------
+  //
+  // The rasterizer's API predates the kurbo port and names its builder methods
+  // `moveTo`, `lineTo`, `quadTo`, `cubicTo`, `close`, so those spellings are
+  // kept as aliases for kurbo's. New code should prefer the kurbo names.
+
+  /** `BezPath::move_to`. */
+  moveTo(x: number, y: number): this {
+    return this.move_to(new Point(x, y));
+  }
+
+  /** `BezPath::line_to`. */
+  lineTo(x: number, y: number): this {
+    return this.line_to(new Point(x, y));
+  }
+
+  /** `BezPath::quad_to`. */
+  quadTo(cx: number, cy: number, x: number, y: number): this {
+    return this.quad_to(new Point(cx, cy), new Point(x, y));
+  }
+
+  /** `BezPath::curve_to`. */
+  cubicTo(c1x: number, c1y: number, c2x: number, c2y: number, x: number, y: number): this {
+    return this.curve_to(new Point(c1x, c1y), new Point(c2x, c2y), new Point(x, y));
+  }
+
+  /** `BezPath::close_path`. */
+  close(): this {
+    return this.close_path();
   }
 }

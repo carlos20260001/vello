@@ -1,7 +1,8 @@
 # Node.js port: `vello_cpu` replacement
 
 TypeScript replacement for the glyph-rasterization part of
-[`vello_cpu`](https://github.com/linebender/vello/tree/main/vello_cpu).
+[`vello_cpu`](https://github.com/linebender/vello/tree/main/vello_cpu), plus the
+three-stage render pipeline that surrounds it.
 
 ## Why
 
@@ -24,19 +25,47 @@ keeps the port dependency-free.
 
 ## Modules to port
 
-| Rust module | Purpose | TS status |
+`src/` mirrors the Rust crate's layout, so a ported call site can be checked
+against upstream file by file:
+
+| Rust | Port | Purpose |
 |---|---|---|
-| `text.rs` (`CpuGlyphRunBackend`) | glyph -> raster metrics + coverage bitmap | done |
-| `render.rs` / `fine/` | the coverage rasterizer | done (scanline) |
-| `span.rs`, `region.rs` | span/region tracking | not needed for glyphs |
+| `kurbo::{Affine, Point, Rect, Shape, common, …}` | `src/kurbo/` | the geometry vocabulary |
+| `vello_cpu::record` | `src/record/` | the recorded scene and layer state |
+| `vello_cpu::coarse::{cmd, bucketer}` | `src/coarse/` | transform, bound, bin |
+| `vello_cpu::render` | `src/render/` | the driver, plus the fine stage |
+| (no counterpart) | `src/rasterizer.ts`, `src/path.ts` | the glyph rasterizer |
 
-Deliberately **not** ported: gradients, image brushes, blend modes, blur
-filters, stroked paths, and the multithreaded `rayon` dispatch. `epaint`
-only needs filled glyph coverage; everything else in `vello_cpu` is used by
-the vector-graphics side that the headless core does not reproduce.
+`src/rasterizer.ts` and `src/path.ts` stay at the top level because they have
+no counterpart in `vello_cpu`: the glyph rasterizer is the one part of the crate
+`epaint` actually reaches for, and it is kept independently testable rather than
+folded into the render pipeline.
 
-The geometry itself (path building, transforms) is not needed here: the
-skrifa port hands over paths directly.
+Porting status of the pipeline itself:
+
+| Upstream | Status |
+|---|---|
+| `record.rs` (layer stack, clip intersection, opacity) | done |
+| `coarse/{cmd, bucketer}.rs` (transform, bbox, bins) | done |
+| `fine/` (rasterize, composite, blend, clip) | done |
+
+Deliberately **not** ported:
+- gradient and image brushes, and the `vello_common::encode` paint encoding
+  behind them — only solid colours are rendered;
+- stroked paths (`kurbo::Stroke`), and the `kurbo` curve/stroke API beyond the
+  geometry vocabulary the pipeline needs;
+- blur and other filters (`vello_common::filter_effects`), so
+  `fill_blurred_rounded_rect` draws the exact rectangle without the softness;
+- masks as anything other than a recorded clip layer;
+- SIMD dispatch (`fearless_simd` `Level`), `RenderMode`, thread count and the
+  multithreaded dispatcher — they choose *how* to rasterize, and there is one
+  rasterizer here;
+- the glifo glyph atlas (`vello_cpu::text`), which egui replaces with its own
+  font atlas;
+- even-odd fills: `rasterize.ts` implements the non-zero winding rule alone.
+
+`epaint` only needs filled glyph coverage; everything else in `vello_cpu` is
+used by the vector-graphics side that the headless core does not reproduce.
 
 ## Approach
 

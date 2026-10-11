@@ -1,18 +1,10 @@
 /**
- * A TypeScript port of `vello_cpu`, the CPU glyph rasterizer.
+ * The package entry point: re-exports `lib.ts`, which mirrors the Rust crate's
+ * module layout.
  *
- * Only the glyph-rasterization part of vello_cpu is ported — that is what egui
- * needs. vello_cpu is a general CPU vector renderer, and the pipeline now exists
- * for it (record → coarse → fine), but strokes, gradients, blend modes, blur
- * and rayon dispatch are deliberately not ported.
- *
- * Output shape mirrors glifo's `RasterMetrics`, which is what egui consumes —
- * see `rasterizer.ts` for the y-down `bearing_y` convention.
+ * This module used to list every file directly. It now goes through `lib.ts`
+ * so the public surface is declared in one place that corresponds to
+ * `vello_cpu/src/lib.rs`.
  */
 
-export * from './rasterizer.js';
-export * from './path.js';
-export * from './transform.js';
-export * from './scene.js';
-export * from './context.js';
-export * from './render.js';
+export * from './lib.js';

@@ -3,9 +3,9 @@ import { describe, expect, it } from 'vitest';
 import { RenderContext, newPixmap } from './context.js';
 import { solidBrush } from '@egui-node/peniko-ts';
 import { Mix, Compose, BlendMode } from '@egui-node/peniko-ts';
-import { Affine } from './transform.js';
+import { Affine } from '../kurbo/mod.js';
 // Registers the scene renderer with context.ts.
-import './render.js';
+import './mod.js';
 
 /** Reads a pixel as premultiplied RGBA in 0..255. */
 function px(p: ReturnType<typeof newPixmap>, x: number, y: number): [number, number, number, number] {
@@ -110,6 +110,31 @@ describe('RenderContext: layers', () => {
     expect(px(p, 15, 15)[3]).toBe(0);
     expect(px(p, 0, 0)[3]).toBe(0);
   });
+
+  it('resolves a clip through the transform in force when it was pushed', () => {
+    const ctx = new RenderContext(32, 32);
+    // The clip is 0..4 at 4x, so 0..16 on screen, whatever transform is in
+    // force afterwards; the fill is 0..8 at identity, so 0..8 on screen. A clip
+    // resolved through the *fill's* transform would only cover 0..4 and half
+    // the rectangle would go missing.
+    ctx.set_transform(Affine.scale(4));
+    ctx.push_clip_layer({
+      commands: [
+        { kind: 'MoveTo', x: 0, y: 0 },
+        { kind: 'LineTo', x: 4, y: 0 },
+        { kind: 'LineTo', x: 4, y: 4 },
+        { kind: 'LineTo', x: 0, y: 4 },
+        { kind: 'Close' },
+      ],
+    });
+    ctx.set_transform(Affine.IDENTITY);
+    ctx.fill_rect({ x0: 0, y0: 0, x1: 8, y1: 8 }, solidBrush(RED));
+    ctx.pop_layer();
+    const p = newPixmap(32, 32);
+    ctx.flush(p);
+    expect(px(p, 7, 7)[3]).toBe(255);
+    expect(px(p, 9, 9)[3]).toBe(0);
+  });
 });
 
 describe('RenderContext: fills', () => {
@@ -161,6 +186,46 @@ describe('RenderContext: fills', () => {
     const p = newPixmap(32, 32);
     ctx.flush(p);
     for (let i = 3; i < p.data.length; i += 4) expect(p.data[i]).toBe(0);
+  });
+
+  it('lands a one-pixel rect on the pixel it names', () => {
+    // The sharpest check of both coordinate conventions at once: a 1x1 rect at
+    // the origin must paint pixel (0, 0) and nothing else. A y-flip off by one
+    // would paint (0, 1); a bitmap-origin mismatch would paint (1, 0).
+    const ctx = new RenderContext(8, 8);
+    ctx.fill_rect({ x0: 0, y0: 0, x1: 1, y1: 1 }, solidBrush(RED));
+    const p = newPixmap(8, 8);
+    ctx.flush(p);
+    expect(px(p, 0, 0)).toEqual([255, 0, 0, 255]);
+    for (let i = 4; i < p.data.length; i += 4) expect(p.data[i]).toBe(0);
+  });
+
+  it('keeps a rect away from the origin in the columns it names', () => {
+    // Same two conventions, away from the origin: the coverage bitmap has to be
+    // positioned by its bounds, not assumed to start at device 0.
+    const ctx = new RenderContext(32, 32);
+    ctx.fill_rect({ x0: 20, y0: 20, x1: 28, y1: 28 }, solidBrush(RED));
+    const p = newPixmap(32, 32);
+    ctx.flush(p);
+    expect(px(p, 24, 24)[3]).toBe(255);
+    expect(px(p, 19, 19)[3]).toBe(0);
+    expect(px(p, 28, 28)[3]).toBe(0);
+  });
+
+  it('composites a shape that straddles a bin boundary exactly once', () => {
+    // Bins are 256 rows. A shape spanning the boundary is rendered by both bins
+    // it overlaps, so each bin must touch only its own rows: compositing twice
+    // at half opacity would give 0.75 instead of 0.5.
+    const ctx = new RenderContext(260, 260);
+    ctx.push_opacity_layer(0.5);
+    ctx.fill_rect({ x0: 0, y0: 250, x1: 8, y1: 262 }, solidBrush(RED));
+    ctx.pop_layer();
+    const p = newPixmap(260, 260);
+    ctx.flush(p);
+    expect(px(p, 4, 255)[3]).toBe(128);
+    expect(px(p, 4, 256)[3]).toBe(128);
+    // Row 261 of the rectangle falls outside the target and is clipped.
+    expect(px(p, 4, 259)[3]).toBe(128);
   });
 
   it('clears the target to transparent by default', () => {
